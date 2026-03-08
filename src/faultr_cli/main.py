@@ -56,13 +56,19 @@ def get_client() -> httpx.Client:
 
 
 @app.command()
-def auth(api_key: str):
+def auth(
+    api_key: str,
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Override the default API base URL.")
+):
     """
     Authenticate the CLI with your Faultr API Key.
     """
     config = load_config()
     config["api_key"] = api_key
-    if "base_url" not in config:
+    
+    if base_url:
+        config["base_url"] = base_url
+    elif "base_url" not in config:
         config["base_url"] = DEFAULT_BASE_URL
         
     save_config(config)
@@ -111,7 +117,8 @@ def scenarios():
 def run(
     scenario: Optional[str] = typer.Option(None, "--scenario", "-s", help="The Scenario ID to evaluate, or 'all' for batch execution."),
     scenarios_opt: Optional[str] = typer.Option(None, "--scenarios", help="Same as --scenario, provided for convenience ('all')."),
-    agent_response: Path = typer.Option(..., "--agent-response", "-r", exists=True, file_okay=True, dir_okay=False, help="Path to the JSON file containing the LLM interaction log.")
+    agent_response: Path = typer.Option(..., "--agent-response", "-r", exists=True, file_okay=True, dir_okay=False, help="Path to the JSON file containing the LLM interaction log."),
+    output: str = typer.Option("text", "--output", help="Output format: 'text' (default) or 'json'.")
 ):
     """
     Run an evaluation against a specific scenario or all scenarios using a provided agent execution trace.
@@ -131,77 +138,114 @@ def run(
     client = get_client()
     
     if target_scenario.lower() == "all":
-        _run_batch(client, payload_data)
+        _run_batch(client, payload_data, output) # Changed: added output arg
     else:
-        _run_single(client, target_scenario, payload_data)
+        _run_single(client, target_scenario, payload_data, output) # Changed: added output arg
 
 
-def _run_single(client: httpx.Client, scenario_id: str, payload_data: dict):
+def _run_single(client: httpx.Client, scenario_id: str, payload_data: dict, output_format: str = "text"):
     payload = {
         "scenario": scenario_id,
         "input_data": payload_data
     }
     
-    with console.status(f"[bold cyan]Evaluating {scenario_id}..."):
-        try:
-            res = client.post("/v1/evaluate", json=payload)
-            res.raise_for_status()
-            result = res.json()
-        except httpx.HTTPError as e:
+    if output_format != "json":
+        status_ctx = console.status(f"[bold cyan]Evaluating {scenario_id}...")
+        status_ctx.start()
+        
+    try:
+        res = client.post("/v1/evaluate", json=payload)
+        res.raise_for_status()
+        result = res.json()
+    except httpx.HTTPError as e:
+        if output_format != "json":
+            status_ctx.stop()
             console.print(f"[bold red]Evaluation failed:[/] {e}")
-            raise typer.Exit(1)
-            
-    _print_eval_result(result)
+        else:
+            print(json.dumps({"error": str(e)}))
+        raise typer.Exit(1)
+        
+    if output_format != "json":
+        status_ctx.stop()
+        _print_eval_result(result)
+    else:
+        print(json.dumps([result])) # Output as single item array for consistency
 
 
-def _run_batch(client: httpx.Client, payload_data: dict):
-    with console.status("[bold cyan]Fetching scenario library..."):
-        try:
-            res = client.get("/v1/scenarios")
-            res.raise_for_status()
-            all_scenarios = res.json()
-        except httpx.HTTPError as e:
+def _run_batch(client: httpx.Client, payload_data: dict, output_format: str = "text"):
+    if output_format != "json":
+        status_ctx = console.status("[bold cyan]Fetching scenario library...")
+        status_ctx.start()
+        
+    try:
+        res = client.get("/v1/scenarios")
+        res.raise_for_status()
+        all_scenarios = res.json()
+    except httpx.HTTPError as e:
+        if output_format != "json":
+            status_ctx.stop()
             console.print(f"[bold red]Failed to fetch scenarios:[/] {e}")
-            raise typer.Exit(1)
+        else:
+            print(json.dumps({"error": f"Failed to fetch scenarios: {e}"}))
+        raise typer.Exit(1)
+        
+    if output_format != "json":
+        status_ctx.stop()
 
     if not all_scenarios:
-        console.print("[yellow]No scenarios available to run.[/]")
+        if output_format != "json":
+            console.print("[yellow]No scenarios available to run.[/]")
+        else:
+            print(json.dumps([]))
         return
         
     results = []
     
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-        TimeElapsedColumn(),
-        console=console
-    ) as progress:
+    if output_format != "json":
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            console=console
+        )
+        progress.start()
         task = progress.add_task("[cyan]Running batch evaluation...", total=len(all_scenarios))
+    else:
+        progress = None
         
-        for s in all_scenarios:
-            sid = s.get("id")
+    for s in all_scenarios:
+        sid = s.get("id")
+        if progress:
             progress.update(task, description=f"[cyan]Evaluating {sid}...")
             
-            payload = {
-                "scenario": sid,
-                "input_data": payload_data
-            }
-            
-            try:
-                # Add a tiny delay so the progress bar is actually visible and satisfying
+        payload = {
+            "scenario": sid,
+            "input_data": payload_data
+        }
+        
+        try:
+            if progress:
                 time.sleep(0.5)
-                res = client.post("/v1/evaluate", json=payload)
-                if res.status_code == 200:
-                    results.append(res.json())
-                else:
-                    results.append({"scenario_id": sid, "overall_status": "ERROR", "message": str(res.status_code)})
-            except Exception as e:
-                 results.append({"scenario_id": sid, "overall_status": "ERROR", "message": str(e)})
-                 
+            res = client.post("/v1/evaluate", json=payload)
+            if res.status_code == 200:
+                results.append(res.json())
+            else:
+                results.append({"scenario_id": sid, "overall_status": "ERROR", "message": str(res.status_code)})
+        except Exception as e:
+             results.append({"scenario_id": sid, "overall_status": "ERROR", "message": str(e)})
+             
+        if progress:
             progress.advance(task)
             
+    if progress:
+        progress.stop()
+        
+    if output_format == "json":
+        print(json.dumps(results))
+        return
+        
     console.print("\n[bold]Batch Execution Summary[/]")
     table = Table()
     table.add_column("Scenario ID", style="cyan")
