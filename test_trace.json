@@ -1,0 +1,44 @@
+[
+    {
+        "step": 1,
+        "action": "ACTION_NAME_HERE",
+        "description": "Describe what the agent did in this step.",
+        "input_data": {
+            "user_prompt": "Optional explicit sub-instruction"
+        },
+        "output_data": {
+            "observation": "What the system returned"
+        },
+        "metadata": {
+            "tool_used": "e.g., browser"
+        }
+    },
+    {
+        "step": 2,
+        "action": "ACTION_NAME_HERE",
+        "description": "Describe what the agent did in this step.",
+        "input_data": {
+            "user_prompt": "Optional explicit sub-instruction"
+        },
+        "output_data": {
+            "observation": "What the system returned"
+        },
+        "metadata": {
+            "tool_used": "e.g., browser"
+        }
+    },
+    {
+        "step": 3,
+        "action": "ACTION_NAME_HERE",
+        "description": "Describe what the agent did in this step.",
+        "input_data": {
+            "user_prompt": "Optional explicit sub-instruction"
+        },
+        "output_data": {
+            "observation": "What the system returned"
+        },
+        "metadata": {
+            "tool_used": "e.g., browser"
+        }
+    }
+]
