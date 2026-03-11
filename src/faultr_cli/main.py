@@ -154,7 +154,7 @@ def _run_single(client: httpx.Client, scenario_id: str, payload_data: dict, outp
         status_ctx.start()
         
     try:
-        res = client.post("/v1/evaluate", json=payload)
+        res = client.post("/v1/evaluations", json=payload)
         res.raise_for_status()
         result = res.json()
     except httpx.HTTPError as e:
@@ -228,7 +228,7 @@ def _run_batch(client: httpx.Client, payload_data: dict, output_format: str = "t
         try:
             if progress:
                 time.sleep(0.5)
-            res = client.post("/v1/evaluate", json=payload)
+            res = client.post("/v1/evaluations", json=payload)
             if res.status_code == 200:
                 results.append(res.json())
             else:
