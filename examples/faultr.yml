@@ -1,0 +1,28 @@
+name: Faultr Agent Evaluation
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  faultr-evaluation:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write # Required to post results as a PR comment
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      # 1. First, run your agent integration tests and ensure they output a trace
+      # For example: pytest tests/agent --output-trace=traces/latest.json
+      # - name: Generate Trace
+      #   run: ./scripts/generate_trace.sh > traces/latest.json
+      
+      # 2. Feed the trace into the Faultr evaluation action
+      - name: Run Faultr Agentic Stress Tests
+        uses: faultr-ai/faultr-cli@main
+        with:
+          api_key: ${{ secrets.FAULTR_API_KEY }}
+          scenarios: all # Or a specific ID like "S001"
+          trace_file: traces/latest.json # Feed the output of step 1 here
+          fail_on: critical # Fail the pipeline if CRITICAL severity findings occur

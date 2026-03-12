@@ -1,0 +1,137 @@
+name: 'Faultr Evaluation'
+description: 'Run agentic stress testing evaluations via Faultr CLI and post results to pull requests'
+inputs:
+  api_key:
+    description: 'Faultr API Key'
+    required: true
+  scenarios:
+    description: 'Scenarios to run (ID or "all")'
+    required: false
+    default: 'all'
+  trace_file:
+    description: 'Path to multi-step agent trace JSON file'
+    required: false
+  agent_response:
+    description: 'Path to single agent response JSON file'
+    required: false
+  fail_on:
+    description: 'Severity level to fail the CI check (critical, high, medium, low). Empty string to never fail.'
+    required: false
+    default: 'critical'
+  base_url:
+    description: 'Faultr API Base URL'
+    required: false
+    default: 'https://app.faultr.ai'
+runs:
+  using: "composite"
+  steps:
+    - name: Install Faultr CLI
+      shell: bash
+      run: pip install faultr-cli
+
+    - name: Authenticate Faultr
+      shell: bash
+      run: faultr auth "${{ inputs.api_key }}" --base-url "${{ inputs.base_url }}"
+
+    - name: Run Evaluation
+      shell: bash
+      run: |
+        CMD="faultr run --scenarios ${{ inputs.scenarios }} --output json"
+        if [ -n "${{ inputs.trace_file }}" ]; then
+          CMD="$CMD --trace ${{ inputs.trace_file }}"
+        elif [ -n "${{ inputs.agent_response }}" ]; then
+          CMD="$CMD --agent-response ${{ inputs.agent_response }}"
+        else
+          echo "Error: You must provide either trace_file or agent_response input to the action."
+          exit 1
+        fi
+        echo "Running: $CMD"
+        $CMD > results.json || true
+
+    - name: Parse Results and Post PR Comment
+      shell: python
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        FAIL_ON: ${{ inputs.fail_on }}
+      run: |
+        import json
+        import os
+        import sys
+        import urllib.request
+        
+        fail_on_level = os.environ.get("FAIL_ON", "").upper()
+        severity_ranks = {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1}
+        threshold = severity_ranks.get(fail_on_level, 5) # Default to 5 (never fail) if empty or invalid
+        
+        try:
+            with open('results.json') as f:
+                results = json.load(f)
+        except Exception as e:
+            print("Failed to read results.json:", e)
+            print("Action Failed.")
+            sys.exit(1)
+            
+        if isinstance(results, dict) and "error" in results:
+            print("Faultr CLI returned an error:", results["error"])
+            sys.exit(1)
+            
+        markdown_lines = [
+            "## 🛡️ Faultr Agentic Security Evaluation",
+            "**Target:** " + os.environ.get("GITHUB_SHA", "Unknown Commit")[:7],
+            "",
+            "| Scenario | Status | Trace Execution |",
+            "| :--- | :---: | :--- |"
+        ]
+        
+        should_fail = False
+        findings_count = {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        
+        for run in results:
+            scenario_id = run.get("evaluation_id", run.get("scenario_id", "Unknown"))
+            status = run.get("overall_status", "UNKNOWN")
+            
+            icon = "🟢" if status == "PASS" else "🔴" if status == "FAIL" else "🟡"
+            
+            # Count severities from findings
+            steps = run.get("step_results", [])
+            max_severity = 0
+            for step in steps:
+                for finding in step.get("findings", []):
+                    sev = finding.get("severity", "").upper()
+                    if sev in findings_count:
+                        findings_count[sev] += 1
+                        if severity_ranks[sev] > max_severity:
+                            max_severity = severity_ranks[sev]
+                            
+            if max_severity >= threshold:
+                should_fail = True
+                
+            markdown_lines.append(f"| `{scenario_id}` | {icon} {status} | [View Details](https://app.faultr.ai/evaluations/{run.get('evaluation_id', '')}) |")
+            
+        markdown_lines.append("")
+        markdown_lines.append(f"**Findings Summary:** 🛑 {findings_count['CRITICAL']} Critical | 🟠 {findings_count['HIGH']} High | 🟡 {findings_count['MEDIUM']} Medium | 🔵 {findings_count['LOW']} Low")
+        
+        comment_body = "\n".join(markdown_lines)
+        print(comment_body)
+        
+        pr_number = os.environ.get("PR_NUMBER")
+        repo = os.environ.get("GITHUB_REPOSITORY")
+        token = os.environ.get("GITHUB_TOKEN")
+        
+        if pr_number and pr_number != "null" and token:
+            url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/comments"
+            req = urllib.request.Request(url, method="POST")
+            req.add_header("Authorization", f"Bearer {token}")
+            req.add_header("Accept", "application/vnd.github.v3+json")
+            data = json.dumps({"body": comment_body}).encode("utf-8")
+            try:
+                urllib.request.urlopen(req, data=data)
+                print("Successfully posted PR comment!")
+            except Exception as e:
+                print("Failed to post PR comment via API:", e)
+                
+        if should_fail:
+            print(f"::error::Faultr detected findings meeting the failure threshold ({fail_on_level})!")
+            sys.exit(1)
