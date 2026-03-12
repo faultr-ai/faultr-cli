@@ -12,7 +12,61 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeEl
 from rich import print as rprint
 
 app = typer.Typer(
-    help="Faultr CLI: Agentic Stress Testing Automation",
+    help="""
+Faultr CLI: Agentic Stress Testing Automation
+
+The faultr CLI provides native environment testing tools to run agent action traces against our comprehensive evaluation library.
+
+🔹 CORE COMMANDS
+
+1. Authentication
+─────────────────────────────────────────────────────────────
+  Authenticate your local environment with Faultr.
+  $ faultr auth <api_key>
+  $ faultr auth <api_key> --base-url http://127.0.0.1:8000/v1
+
+
+2. Scenario Management
+─────────────────────────────────────────────────────────────
+  List all standard scenarios available to target:
+  $ faultr scenarios list
+
+  List your manually created custom scenarios:
+  $ faultr scenarios list --custom
+
+  Create a custom scenario (Interactive CLI builder):
+  $ faultr scenarios create
+
+  Create a custom scenario (AI Assisted fast-draft):
+  $ faultr scenarios create --ai "Test if the agent adds unapproved insurance to flights"
+
+  Delete a custom scenario:
+  $ faultr scenarios delete CUSTOM-XXX-123456
+
+
+3. Evaluation Execution
+─────────────────────────────────────────────────────────────
+  Run a single agent string response against a scenario:
+  $ faultr run --scenario S001 --response "I booked the hotel and added breakfast."
+
+  Run a multi-step AgentAction trace (The standard way):
+  $ faultr run --scenario S001 --trace path/to/trace.json --verbose
+
+  Run an entire suite of scenarios against a directory of traces:
+  $ faultr run --batch path/to/eval_run.json
+
+
+4. Trace Utilities
+─────────────────────────────────────────────────────────────
+  Generate a clean JSON template to fill out your agent's steps:
+  $ faultr trace init --steps 5 --output my_new_trace.json
+
+
+5. Reporting
+─────────────────────────────────────────────────────────────
+  Pull down a detailed PDF/Markdown report of a specific evaluation run:
+  $ faultr report <evaluation_id>
+""",
     no_args_is_help=True,
     add_completion=False,
 )
@@ -51,7 +105,7 @@ def get_client() -> httpx.Client:
     return httpx.Client(
         base_url=base_url,
         headers={"Authorization": f"Bearer {api_key}"},
-        timeout=30.0
+        timeout=120.0
     )
 
 
@@ -202,14 +256,15 @@ def create_scenario(
             "description": description,
             "domain": domain,
             "difficulty": difficulty,
-            "trap_conditions": {"description": trap_desc},
-            "evaluation_criteria": [{"dimension": dimension, "rule": rule, "severity": severity}],
+            "trap_conditions": {"description": trap_desc, "simulated_environment": {}},
+            "evaluation_criteria": [{"dimension": dimension, "rule": rule, "severity": severity, "description": rule}],
             "manual_mode_config": {
                 "test_dimension": dimension,
                 "trap_pattern": trap_pattern,
                 "constraints_to_extract": [],
                 "evaluation_focus": "",
-                "severity_if_violated": severity
+                "severity_if_violated": severity,
+                "applicable_when": ""
             }
         }
         
